@@ -1,7 +1,7 @@
 /*
  * @Author: Chuyang Su cs4570@columbia.edu
  * @Date: 2026-02-11 14:50:41
- * @LastEditTime: 2026-02-11 14:53:00
+ * @LastEditTime: 2026-02-11 15:03:48
  * @FilePath: /InputSchuyn/src/Discovery.hpp
  * @Description: 
  * 专门用于扫描系统中当前活跃的窗口和它们的输入法状态，提供给主程序进行决策
@@ -40,13 +40,14 @@ namespace Discovery {
 
         // Retrieve the process name using your existing helper
         std::wstring exe = GetProcessName(hwnd);
+        if (exe == L"unknown" || exe.empty()) return TRUE;
         
         // Retrieve title
         wchar_t titleBuf[256];
-        GetWindowTextW(hwnd, titleBuf, 256);
-
-        auto* pSet = reinterpret_cast<std::set<WindowInfo>*>(lParam);
-        pSet->insert({ exe, titleBuf });
+        if (GetWindowTextW(hwnd, titleBuf, 256) > 0) {
+            auto* pSet = reinterpret_cast<std::set<WindowInfo>*>(lParam);
+            pSet->insert({ exe, titleBuf });
+        }
 
         return TRUE;
     }
