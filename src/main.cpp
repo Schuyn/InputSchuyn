@@ -20,6 +20,9 @@
 #define HKL_ZH (HKL)0x08040804
 #define TIMER_HIDE_UI 101
 
+// Define your default language
+#define LANG_DEFAULT HKL_ZH
+
 // Global storage for rules
 std::map<std::wstring, HKL> appRules;
 HWND g_hwndUI = NULL;
@@ -136,10 +139,16 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook, DWORD event, HWND hwnd,
                            LONG idObject, LONG idChild, DWORD dwEventThread, DWORD dwmsEventTime) {
     if (event == EVENT_SYSTEM_FOREGROUND && hwnd != NULL) {
         std::wstring exeName = GetProcessName(hwnd);
+        
         if (appRules.count(exeName)) {
+            // Rule exists: Apply specific language
             HKL target = appRules[exeName];
             PostMessage(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, (LPARAM)target);
             ShowIndicator(hwnd, target == HKL_EN);
+        } else {
+            // No rule found: Reset to DEFAULT instead of inheriting
+            PostMessage(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, (LPARAM)LANG_DEFAULT);
+            // Optional: You can decide whether to show UI for default reset
         }
     }
 }
