@@ -1,7 +1,7 @@
 /*
  * @Author: Chuyang Su cs4570@columbia.edu
  * @Date: 2026-02-11 13:47:46
- * @LastEditTime: 2026-02-11 14:28:46
+ * @LastEditTime: 2026-02-11 14:59:41
  * @FilePath: /InputSchuyn/src/main.cpp
  * @Description: 
  * 集成了窗口监控和自动切换输入法的逻辑
@@ -12,6 +12,7 @@
 #include <map>
 #include <fstream>
 #include <vector>
+#include "Discovery.hpp" // [New] Include the discovery module
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -135,11 +136,32 @@ std::wstring GetProcessName(HWND hwnd) {
     return name;
 }
 
+FILETIME g_lastWriteTime = { 0 };
+
+void CheckForReload() {
+    std::wstring path = GetExeDirectory() + L"\\rules.json";
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        FILETIME currentWriteTime;
+        if (GetFileTime(hFile, NULL, NULL, &currentWriteTime)) {
+            // Compare file times
+            if (CompareFileTime(&g_lastWriteTime, &currentWriteTime) != 0) {
+                g_lastWriteTime = currentWriteTime;
+                LoadRulesJson(); // Reload if file changed
+                std::wcout << L"[InputSchuyn] Rules hot-reloaded!" << std::endl;
+            }
+        }
+        CloseHandle(hFile);
+    }
+}
+
 void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook, DWORD event, HWND hwnd,
                            LONG idObject, LONG idChild, DWORD dwEventThread, DWORD dwmsEventTime) {
+    CheckForReload(); // hot-reload rules on every foreground change
+    
     if (event == EVENT_SYSTEM_FOREGROUND && hwnd != NULL) {
         std::wstring exeName = GetProcessName(hwnd);
-        
+
         if (appRules.count(exeName)) {
             // Rule exists: Apply specific language
             HKL target = appRules[exeName];
@@ -157,11 +179,15 @@ int main() {
     CreateIndicatorWindow();
     LoadRulesJson();
 
+    // [New] Run the discovery to show the user what apps are currently active
+    Discovery::Run(); 
+
     HWINEVENTHOOK hook = SetWinEventHook(
         EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
         NULL, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
     );
-
+    std::wcout << L"--- InputSchuyn Running (v1.3) ---" << std::endl;
+    
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);

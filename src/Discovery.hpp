@@ -1,7 +1,7 @@
 /*
  * @Author: Chuyang Su cs4570@columbia.edu
  * @Date: 2026-02-11 14:50:41
- * @LastEditTime: 2026-02-11 14:50:47
+ * @LastEditTime: 2026-02-11 14:53:00
  * @FilePath: /InputSchuyn/src/Discovery.hpp
  * @Description: 
  * 专门用于扫描系统中当前活跃的窗口和它们的输入法状态，提供给主程序进行决策
@@ -11,30 +11,59 @@
 #include <set>
 #include <string>
 #include <iostream>
+#include <iomanip> // For formatting the output
 
-// Use the existing GetProcessName helper
+// Using 'extern' to reference the function defined in main.cpp
+// This avoids code duplication
 extern std::wstring GetProcessName(HWND hwnd);
 
 namespace Discovery {
-    void Run() {
-        std::set<std::wstring> apps;
-        std::wcout << L"\n--- [InputSchuyn] Discovery: Active Processes ---" << std::endl;
 
-        EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
-            if (IsWindowVisible(hwnd)) {
-                int len = GetWindowTextLengthW(hwnd);
-                if (len > 0) {
-                    std::wstring name = GetProcessName(hwnd);
-                    auto* pApps = reinterpret_cast<std::set<std::wstring>*>(lParam);
-                    pApps->insert(name);
-                }
-            }
-            return TRUE;
-        }, reinterpret_cast<LPARAM>(&apps));
+    // Struct to store window info for a cleaner display
+    struct WindowInfo {
+        std::wstring exeName;
+        std::wstring title;
 
-        for (const auto& app : apps) {
-            std::wcout << L"  > " << app << std::endl;
+        // Set needs a way to compare for deduplication
+        bool operator<(const WindowInfo& other) const {
+            return exeName < other.exeName;
         }
-        std::wcout << L"--- End of Discovery ---\n" << std::endl;
+    };
+
+    // Callback function for EnumWindows
+    BOOL CALLBACK EnumProc(HWND hwnd, LPARAM lParam) {
+        if (!IsWindowVisible(hwnd)) return TRUE;
+
+        // Get window title length
+        int len = GetWindowTextLengthW(hwnd);
+        if (len == 0) return TRUE;
+
+        // Retrieve the process name using your existing helper
+        std::wstring exe = GetProcessName(hwnd);
+        
+        // Retrieve title
+        wchar_t titleBuf[256];
+        GetWindowTextW(hwnd, titleBuf, 256);
+
+        auto* pSet = reinterpret_cast<std::set<WindowInfo>*>(lParam);
+        pSet->insert({ exe, titleBuf });
+
+        return TRUE;
+    }
+
+    // Main discovery runner
+    void Run() {
+        std::set<WindowInfo> foundApps;
+        std::wcout << L"\n==========================================" << std::endl;
+        std::wcout << L"    InputSchuyn Discovery: Active Apps    " << std::endl;
+        std::wcout << L"==========================================" << std::endl;
+
+        EnumWindows(EnumProc, reinterpret_cast<LPARAM>(&foundApps));
+
+        for (const auto& app : foundApps) {
+            std::wcout << L" [App]: " << std::left << std::setw(20) << app.exeName 
+                    << L" | [Title]: " << app.title << std::endl;
+        }
+        std::wcout.flush(); // Force output
     }
 }
