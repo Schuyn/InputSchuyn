@@ -1,7 +1,7 @@
 /*
  * @Author: Chuyang Su cs4570@columbia.edu
  * @Date: 2026-02-11 14:50:41
- * @LastEditTime: 2026-02-11 15:03:48
+ * @LastEditTime: 2026-02-11 15:07:29
  * @FilePath: /InputSchuyn/src/Discovery.hpp
  * @Description: 
  * 专门用于扫描系统中当前活跃的窗口和它们的输入法状态，提供给主程序进行决策
@@ -11,60 +11,44 @@
 #include <set>
 #include <string>
 #include <iostream>
-#include <iomanip> // For formatting the output
 
-// Using 'extern' to reference the function defined in main.cpp
-// This avoids code duplication
+// GetProcessName 
 extern std::wstring GetProcessName(HWND hwnd);
 
 namespace Discovery {
 
-    // Struct to store window info for a cleaner display
-    struct WindowInfo {
-        std::wstring exeName;
-        std::wstring title;
-
-        // Set needs a way to compare for deduplication
-        bool operator<(const WindowInfo& other) const {
-            return exeName < other.exeName;
-        }
-    };
-
-    // Callback function for EnumWindows
+    // 这是一个“过滤器”，只负责把发现的 .exe 名字存起来
     BOOL CALLBACK EnumProc(HWND hwnd, LPARAM lParam) {
+        // 只看“看得见”的窗口，忽略后台乱七八糟的系统组件
         if (!IsWindowVisible(hwnd)) return TRUE;
 
-        // Get window title length
-        int len = GetWindowTextLengthW(hwnd);
-        if (len == 0) return TRUE;
-
-        // Retrieve the process name using your existing helper
+        // 获取这个窗口所属的进程名（例如 Code.exe）
         std::wstring exe = GetProcessName(hwnd);
-        if (exe == L"unknown" || exe.empty()) return TRUE;
         
-        // Retrieve title
-        wchar_t titleBuf[256];
-        if (GetWindowTextW(hwnd, titleBuf, 256) > 0) {
-            auto* pSet = reinterpret_cast<std::set<WindowInfo>*>(lParam);
-            pSet->insert({ exe, titleBuf });
+        // 如果名字合法，就把它存进我们的“集合”里
+        if (exe != L"unknown" && !exe.empty()) {
+            auto* pSet = reinterpret_cast<std::set<std::wstring>*>(lParam);
+            pSet->insert(exe);
         }
-
         return TRUE;
     }
 
-    // Main discovery runner
     void Run() {
-        std::set<WindowInfo> foundApps;
-        std::wcout << L"\n==========================================" << std::endl;
-        std::wcout << L"    InputSchuyn Discovery: Active Apps    " << std::endl;
-        std::wcout << L"==========================================" << std::endl;
+        std::set<std::wstring> foundApps;
+        
+        std::wcout << L"\n--- [Discovery Mode] Scanning Active Apps ---" << std::endl;
 
+        // 开始全城搜索：把所有窗口都点一遍名
         EnumWindows(EnumProc, reinterpret_cast<LPARAM>(&foundApps));
 
+        // 搜索完了，把集合里的名字一个一个印出来
         for (const auto& app : foundApps) {
-            std::wcout << L" [App]: " << std::left << std::setw(20) << app.exeName 
-                    << L" | [Title]: " << app.title << std::endl;
+            std::wcout << L" > " << app << std::endl;
         }
-        std::wcout.flush(); // Force output
+
+        std::wcout << L"--- Discovery Complete ---\n" << std::endl;
+        
+        // 关键一步：强制把上面这些话立刻印到屏幕上，不要憋在内存里
+        std::wcout.flush(); 
     }
 }
