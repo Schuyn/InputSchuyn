@@ -1,7 +1,7 @@
 /*
  * @Author: Chuyang Su cs4570@columbia.edu
  * @Date: 2026-02-11 13:47:46
- * @LastEditTime: 2026-02-11 15:45:43
+ * @LastEditTime: 2026-02-11 16:20:18
  * @FilePath: /InputSchuyn/src/main.cpp
  * @Description:
  * Integrates window monitoring and automatic input method switching logic
@@ -29,6 +29,7 @@
 #define ID_BTN_ADD_EN   202
 #define ID_BTN_ADD_ZH   203
 #define ID_BTN_REFRESH  204
+#define ID_BTN_CLEAR_RULE 205 // [New]
 
 // GUI Global variables
 std::map<std::wstring, HKL> appRules;
@@ -127,7 +128,7 @@ void RefreshConfigList() {
     for (const auto& app : currentApps) {
         std::wstring status = appRules.count(app) ? L" [Set]" : L" [New]";
         std::wstring entry = app + status;
-        
+
         // Use LB_ADDSTRINGW to support wide characters
         SendMessageW(g_hwndListBox, LB_ADDSTRING, 0, (LPARAM)(app + status).c_str());
         g_discoveredList.push_back(app);
@@ -145,6 +146,21 @@ LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     appRules[selectedExe] = (wmId == ID_BTN_ADD_EN) ? HKL_EN : HKL_ZH;
                     SaveAllRules();     // Write the in-memory map back to JSON
                     RefreshConfigList(); // Refresh the display status
+                }
+            }
+            if (wmId == ID_BTN_CLEAR_RULE) {
+                int sel = (int)SendMessageW(g_hwndListBox, LB_GETCURSEL, 0, 0);
+                if (sel != LB_ERR) {
+                    std::wstring selectedExe = g_discoveredList[sel];
+                    
+                    if (appRules.count(selectedExe)) {
+                        appRules.erase(selectedExe);
+                        SaveAllRules();
+                        RefreshConfigList();
+                        
+                        std::wcout << L"[InputSchuyn] Rule removed: " << selectedExe << std::endl;
+                        std::wcout.flush();
+                    }
                 }
             }
             if (wmId == ID_BTN_REFRESH) RefreshConfigList();
@@ -240,7 +256,9 @@ int main() {
 
     CreateWindowW(L"BUTTON", L"Set EN", WS_CHILD | WS_VISIBLE, 20, 360, 100, 35, g_hwndConfigPannel, (HMENU)ID_BTN_ADD_EN, cc.hInstance, NULL);
     CreateWindowW(L"BUTTON", L"Set ZH", WS_CHILD | WS_VISIBLE, 140, 360, 100, 35, g_hwndConfigPannel, (HMENU)ID_BTN_ADD_ZH, cc.hInstance, NULL);
-    CreateWindowW(L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE, 260, 360, 100, 35, g_hwndConfigPannel, (HMENU)ID_BTN_REFRESH, cc.hInstance, NULL);
+    CreateWindowW(L"BUTTON", L"Clear Rule", WS_CHILD | WS_VISIBLE, 260, 360, 100, 35, g_hwndConfigPannel, (HMENU)ID_BTN_CLEAR_RULE, cc.hInstance, NULL);
+
+    CreateWindowW(L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE, 20, 405, 100, 35, g_hwndConfigPannel, (HMENU)ID_BTN_REFRESH, cc.hInstance, NULL);
 
     LoadRulesJson();
     RefreshConfigList();
@@ -250,7 +268,7 @@ int main() {
         EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
         NULL, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
     );
-    std::wcout << L"--- InputSchuyn Running (v1.3) ---" << std::endl;
+    std::wcout << L"--- InputSchuyn Running (v1.4) ---" << std::endl;
     
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {

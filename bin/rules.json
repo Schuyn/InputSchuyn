@@ -1,8 +1,6 @@
 {
     "Code.exe": "EN",
-    "GitHubDesktop.exe": "EN",
     "Weixin.exe": "ZH",
     "chrome.exe": "ZH",
-    "claude.exe": "ZH",
-    "explorer.exe": "EN"
+    "claude.exe": "ZH"
 }
