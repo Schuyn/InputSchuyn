@@ -120,13 +120,16 @@ void LoadRulesJson() {
 // GUI Logic
 void RefreshConfigList() {
     if (!g_hwndListBox) return;
-    SendMessage(g_hwndListBox, LB_RESETCONTENT, 0, 0);
+    SendMessageW(g_hwndListBox, LB_RESETCONTENT, 0, 0);
     g_discoveredList.clear();
 
     auto currentApps = Discovery::GetActiveAppsSet();
     for (const auto& app : currentApps) {
         std::wstring status = appRules.count(app) ? L" [Set]" : L" [New]";
-        SendMessage(g_hwndListBox, LB_ADDSTRING, 0, (LPARAM)(app + status).c_str());
+        std::wstring entry = app + status;
+        
+        // Use LB_ADDSTRINGW to support wide characters
+        SendMessageW(g_hwndListBox, LB_ADDSTRING, 0, (LPARAM)(app + status).c_str());
         g_discoveredList.push_back(app);
     }
 }
