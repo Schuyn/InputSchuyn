@@ -1,7 +1,7 @@
 /*
  * @Author: Chuyang Su cs4570@columbia.edu
  * @Date: 2026-02-11 13:47:46
- * @LastEditTime: 2026-02-11 16:20:18
+ * @LastEditTime: 2026-02-11 16:41:00
  * @FilePath: /InputSchuyn/src/main.cpp
  * @Description:
  * Integrates window monitoring and automatic input method switching logic
@@ -15,29 +15,35 @@
 #include <set>
 #include "Discovery.hpp" // Include the discovery module
 
-#pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "advapi32.lib")
 
 #define HKL_EN (HKL)0x04090409
 #define HKL_ZH (HKL)0x08040804
 #define TIMER_HIDE_UI 101
-#define LANG_DEFAULT HKL_ZH // Define your default language
+#define WM_TRAYICON (WM_USER + 1)
 
 // GUI constants
 #define ID_LISTBOX_APPS 201
 #define ID_BTN_ADD_EN   202
 #define ID_BTN_ADD_ZH   203
 #define ID_BTN_REFRESH  204
-#define ID_BTN_CLEAR_RULE 205 // [New]
+#define ID_BTN_CLEAR_RULE 205
+#define ID_BTN_TOGGLE_DEFAULT 206
+#define ID_CHK_STARTUP        207
 
 // GUI Global variables
-std::map<std::wstring, HKL> appRules;
-HWND g_hwndUI = NULL;            // Indicator popup window
-HWND g_hwndConfigPannel = NULL;  // Configuration panel
-HWND g_hwndListBox = NULL;       // List box
-std::vector<std::wstring> g_discoveredList; 
-FILETIME g_lastWriteTime = { 0 };
+std::map<std::wstring, HKL> appRules;    // Per-app input language rules
+HKL g_defaultLang = HKL_ZH;              // Fallback language for apps without a rule
+HWND g_hwndUI = NULL;                    // Indicator popup window
+HWND g_hwndConfigPannel = NULL;          // Configuration panel
+HWND g_hwndListBox = NULL;               // App list box
+HWND g_hwndDefaultBtn = NULL;            // Default language toggle button
+std::vector<std::wstring> g_discoveredList; // Mirrors listbox entries for index lookup
+NOTIFYICONDATAW g_nid = { 0 };           // System tray icon data
+FILETIME g_lastWriteTime = { 0 };        // Tracks rules.json modification time for hot-reload
 
 // --- Helper: Get EXE directory ---
 std::wstring GetExeDirectory() {
@@ -47,6 +53,7 @@ std::wstring GetExeDirectory() {
     return path.substr(0, path.find_last_of(L"\\/"));
 }
 
+// Get the executable filename (e.g. "Code.exe") from a window handle
 std::wstring GetProcessName(HWND hwnd) {
     DWORD pid;
     GetWindowThreadProcessId(hwnd, &pid);
@@ -64,7 +71,35 @@ std::wstring GetProcessName(HWND hwnd) {
     return name;
 }
 
-// Rules management logic
+// Register or unregister this app for Windows startup via the registry
+void SetStartup(bool enable) {
+    HKEY hKey;
+    const wchar_t* runPath = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    if (RegOpenKeyW(HKEY_CURRENT_USER, runPath, &hKey) == ERROR_SUCCESS) {
+        if (enable) {
+            wchar_t exePath[MAX_PATH];
+            GetModuleFileNameW(NULL, exePath, MAX_PATH);
+            RegSetValueExW(hKey, L"InputSchuyn", 0, REG_SZ, (BYTE*)exePath, (lstrlenW(exePath) + 1) * sizeof(wchar_t));
+        } else {
+            RegDeleteValueW(hKey, L"InputSchuyn");
+        }
+        RegCloseKey(hKey);
+    }
+}
+
+// Add a system tray icon that shows the config panel on double-click
+void CreateTrayIcon(HWND hwnd) {
+    g_nid.cbSize = sizeof(NOTIFYICONDATAW);
+    g_nid.hWnd = hwnd;
+    g_nid.uID = 1;
+    g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    g_nid.uCallbackMessage = WM_TRAYICON;
+    g_nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    lstrcpyW(g_nid.szTip, L"InputSchuyn v1.4");
+    Shell_NotifyIconW(NIM_ADD, &g_nid);
+}
+
+// Serialize all app rules from memory to rules.json
 void SaveAllRules() {
     std::wstring configPath = GetExeDirectory() + L"\\rules.json";
     std::wofstream file(configPath);
@@ -82,10 +117,11 @@ void SaveAllRules() {
     }
 }
 
+// Load rules from rules.json with hot-reload support (skips if file unchanged)
 void LoadRulesJson() {
     std::wstring configPath = GetExeDirectory() + L"\\rules.json";
-    
-    // Hot-reload logic: Check if the file's last write time has changed since we last loaded it
+
+    // Skip reload if file hasn't been modified since last load
     HANDLE hFile = CreateFileW(configPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
         FILETIME currentWriteTime;
@@ -118,7 +154,7 @@ void LoadRulesJson() {
     }
 }
 
-// GUI Logic
+// Repopulate the listbox with currently active apps and their rule status
 void RefreshConfigList() {
     if (!g_hwndListBox) return;
     SendMessageW(g_hwndListBox, LB_RESETCONTENT, 0, 0);
@@ -127,16 +163,17 @@ void RefreshConfigList() {
     auto currentApps = Discovery::GetActiveAppsSet();
     for (const auto& app : currentApps) {
         std::wstring status = appRules.count(app) ? L" [Set]" : L" [New]";
-        std::wstring entry = app + status;
-
-        // Use LB_ADDSTRINGW to support wide characters
         SendMessageW(g_hwndListBox, LB_ADDSTRING, 0, (LPARAM)(app + status).c_str());
         g_discoveredList.push_back(app);
     }
 }
 
+// Window procedure for the configuration panel
 LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+        case WM_TRAYICON:
+            if (lp == WM_LBUTTONDBLCLK) ShowWindow(hwnd, SW_SHOW);
+                break;
         case WM_COMMAND: {
             int wmId = LOWORD(wp);
             if (wmId == ID_BTN_ADD_EN || wmId == ID_BTN_ADD_ZH) {
@@ -163,119 +200,108 @@ LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     }
                 }
             }
+            if (wmId == ID_BTN_TOGGLE_DEFAULT) {
+                g_defaultLang = (g_defaultLang == HKL_ZH ? HKL_EN : HKL_ZH);
+                SetWindowTextW(g_hwndDefaultBtn, g_defaultLang == HKL_ZH ? L"Default: ZH" : L"Default: EN");
+            }
+            if (wmId == ID_CHK_STARTUP) {
+                SetStartup(SendMessage((HWND)lp, BM_GETCHECK, 0, 0) == BST_CHECKED);
+            }
             if (wmId == ID_BTN_REFRESH) RefreshConfigList();
             break;
         }
         case WM_CLOSE:
             ShowWindow(hwnd, SW_HIDE); // Clicking X only hides the window, does not exit the program
             return 0;
+        case WM_DESTROY: 
+            Shell_NotifyIconW(NIM_DELETE, &g_nid); 
+            PostQuitMessage(0); 
+            break;
     }
     return DefWindowProc(hwnd, msg, wp, lp);
 }
 
-// UI Logic
+// Indicator popup window and caret-following logic
 LRESULT CALLBACK UIWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_TIMER && wp == TIMER_HIDE_UI) ShowWindow(hwnd, SW_HIDE);
     if (msg == WM_PAINT) {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
+        PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps);
         RECT rect; GetClientRect(hwnd, &rect);
-        HBRUSH hBrush = CreateSolidBrush(RGB(45, 45, 45));
-        FillRect(hdc, &rect, hBrush);
-        DeleteObject(hBrush);
-        SetTextColor(hdc, RGB(255, 255, 255));
-        SetBkMode(hdc, TRANSPARENT);
+        HBRUSH hBrush = CreateSolidBrush(RGB(45, 45, 45)); FillRect(hdc, &rect, hBrush); DeleteObject(hBrush);
+        SetTextColor(hdc, RGB(255, 255, 255)); SetBkMode(hdc, TRANSPARENT);
         DrawTextW(hdc, L"Input Switched", -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         EndPaint(hwnd, &ps);
     }
     return DefWindowProc(hwnd, msg, wp, lp);
 }
 
-void CreateIndicatorWindow() {
-    WNDCLASSW wc = { 0 };
-    wc.lpfnWndProc = UIWndProc;
-    wc.hInstance = GetModuleHandle(NULL);
-    wc.lpszClassName = L"InputSchuynUI";
-    RegisterClassW(&wc);
-
-    g_hwndUI = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT,
-        L"InputSchuynUI", L"", WS_POPUP,
-        0, 0, 150, 40, NULL, NULL, wc.hInstance, NULL
-    );
-    SetLayeredWindowAttributes(g_hwndUI, 0, 220, LWA_ALPHA); // Slight transparency
-}
-
-void ShowIndicator(HWND targetHwnd) {
+// Show the indicator popup near the text caret, or centered on the window as fallback
+void ShowIndicatorAtCaret(HWND targetHwnd) {
     if (!g_hwndUI) return;
-    
-    // Position: Near the center of the active window for now 
-    // (UIA caret positioning can be added later)
-    RECT rect;
-    GetWindowRect(targetHwnd, &rect);
-    int x = rect.left + (rect.right - rect.left) / 2 - 75;
-    int y = rect.top + (rect.bottom - rect.top) / 2 - 20;
-
-    SetWindowPos(g_hwndUI, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+    GUITHREADINFO gti = { sizeof(GUITHREADINFO) };
+    GetGUIThreadInfo(GetWindowThreadProcessId(targetHwnd, NULL), &gti);
+    POINT pt = { gti.rcCaret.left, gti.rcCaret.bottom };
+    ClientToScreen(gti.hwndCaret ? gti.hwndCaret : targetHwnd, &pt);
+    if (pt.x == 0 && pt.y == 0) { // No caret found, fall back to window center
+        RECT r; GetWindowRect(targetHwnd, &r);
+        pt.x = r.left + (r.right - r.left) / 2; pt.y = r.top + (r.bottom - r.top) / 2;
+    }
+    SetWindowPos(g_hwndUI, HWND_TOPMOST, pt.x, pt.y + 10, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
     ShowWindow(g_hwndUI, SW_SHOWNOACTIVATE);
-    InvalidateRect(g_hwndUI, NULL, TRUE); // Trigger repaint
-    SetTimer(g_hwndUI, TIMER_HIDE_UI, 1000, NULL); // Hide after 1s
+    SetTimer(g_hwndUI, TIMER_HIDE_UI, 1000, NULL);
 }
 
-// Event listener logic
-void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook, DWORD event, HWND hwnd, LONG idObject, LONG idChild, DWORD dwEventThread, DWORD dwmsEventTime) {
-    if (event == EVENT_SYSTEM_FOREGROUND && hwnd != NULL) {
-        LoadRulesJson(); // auto hot-reload rules on window switch
-        std::wstring exeName = GetProcessName(hwnd);
-        if (appRules.count(exeName)) {
-            HKL target = appRules[exeName];
-            PostMessage(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, (LPARAM)target);
-            ShowIndicator(hwnd);
-        } else {
-            PostMessage(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, (LPARAM)LANG_DEFAULT);
-        }
+// Foreground window change handler: switches input language based on rules
+void CALLBACK WinEventProc(HWINEVENTHOOK h, DWORD e, HWND hwnd, LONG o, LONG c, DWORD t, DWORD m) {
+    if (e == EVENT_SYSTEM_FOREGROUND && hwnd) {
+        LoadRulesJson(); // Hot-reload rules on every window switch
+        std::wstring exe = GetProcessName(hwnd);
+        HKL target = appRules.count(exe) ? appRules[exe] : g_defaultLang;
+        PostMessage(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, (LPARAM)target);
+        ShowIndicatorAtCaret(hwnd);
     }
 }
 
 int main() {
-    CreateIndicatorWindow();
+    ShowWindow(GetConsoleWindow(), SW_HIDE); // Hide the console window
 
-    // Init GUI for configuration panel
-    WNDCLASSW cc = { 0 };
-    cc.lpfnWndProc = ConfigWndProc;
+    // Initialize UI components
+    WNDCLASSW wc = { 0 }; 
+    wc.lpfnWndProc = UIWndProc; 
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = L"InputSchuynUI"; 
+    RegisterClassW(&wc);
+    g_hwndUI = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+        L"InputSchuynUI", L"", WS_POPUP, 0, 0, 150, 40, NULL, NULL, wc.hInstance, NULL);
+    SetLayeredWindowAttributes(g_hwndUI, 0, 220, LWA_ALPHA);
+
+    WNDCLASSW cc = { 0 }; 
+    cc.lpfnWndProc = ConfigWndProc; 
     cc.hInstance = GetModuleHandle(NULL);
-    cc.lpszClassName = L"ConfigPannelClass";
+    cc.lpszClassName = L"ConfigPannelClass"; 
     cc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     RegisterClassW(&cc);
+    g_hwndConfigPannel = CreateWindowExW(0, L"ConfigPannelClass", L"InputSchuyn Config", WS_OVERLAPPEDWINDOW, 100, 100, 420, 500, NULL, NULL, cc.hInstance, NULL);
+    
+    g_hwndListBox = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", NULL, WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY, 20, 20, 360, 320, g_hwndConfigPannel, (HMENU)ID_LISTBOX_APPS, cc.hInstance, NULL);
+    CreateWindowW(L"BUTTON", L"Set EN", WS_CHILD | WS_VISIBLE, 20, 350, 80, 35, g_hwndConfigPannel, (HMENU)ID_BTN_ADD_EN, cc.hInstance, NULL);
+    CreateWindowW(L"BUTTON", L"Set ZH", WS_CHILD | WS_VISIBLE, 110, 350, 80, 35, g_hwndConfigPannel, (HMENU)ID_BTN_ADD_ZH, cc.hInstance, NULL);
+    CreateWindowW(L"BUTTON", L"Clear", WS_CHILD | WS_VISIBLE, 200, 350, 80, 35, g_hwndConfigPannel, (HMENU)ID_BTN_CLEAR_RULE, cc.hInstance, NULL);
+    CreateWindowW(L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE, 290, 350, 80, 35, g_hwndConfigPannel, (HMENU)ID_BTN_REFRESH, cc.hInstance, NULL);
+    
+    g_hwndDefaultBtn = CreateWindowW(L"BUTTON", L"Default: ZH", WS_CHILD | WS_VISIBLE, 20, 400, 120, 35, g_hwndConfigPannel, (HMENU)ID_BTN_TOGGLE_DEFAULT, cc.hInstance, NULL);
+    CreateWindowW(L"BUTTON", L"Startup", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 160, 400, 100, 35, g_hwndConfigPannel, (HMENU)ID_CHK_STARTUP, cc.hInstance, NULL);
 
-    g_hwndConfigPannel = CreateWindowExW(0, L"ConfigPannelClass", L"InputSchuyn Config Panel", 
-        WS_OVERLAPPEDWINDOW, 100, 100, 400, 500, NULL, NULL, cc.hInstance, NULL);
-
-    g_hwndListBox = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", NULL, 
-        WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY, 20, 20, 340, 320, g_hwndConfigPannel, (HMENU)ID_LISTBOX_APPS, cc.hInstance, NULL);
-
-    CreateWindowW(L"BUTTON", L"Set EN", WS_CHILD | WS_VISIBLE, 20, 360, 100, 35, g_hwndConfigPannel, (HMENU)ID_BTN_ADD_EN, cc.hInstance, NULL);
-    CreateWindowW(L"BUTTON", L"Set ZH", WS_CHILD | WS_VISIBLE, 140, 360, 100, 35, g_hwndConfigPannel, (HMENU)ID_BTN_ADD_ZH, cc.hInstance, NULL);
-    CreateWindowW(L"BUTTON", L"Clear Rule", WS_CHILD | WS_VISIBLE, 260, 360, 100, 35, g_hwndConfigPannel, (HMENU)ID_BTN_CLEAR_RULE, cc.hInstance, NULL);
-
-    CreateWindowW(L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE, 20, 405, 100, 35, g_hwndConfigPannel, (HMENU)ID_BTN_REFRESH, cc.hInstance, NULL);
-
-    LoadRulesJson();
+    CreateTrayIcon(g_hwndConfigPannel);
+    LoadRulesJson(); 
     RefreshConfigList();
-    ShowWindow(g_hwndConfigPannel, SW_SHOW);
-    
-    HWINEVENTHOOK hook = SetWinEventHook(
-        EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
-        NULL, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
-    );
-    std::wcout << L"--- InputSchuyn Running (v1.4) ---" << std::endl;
-    
-    MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+    SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, NULL, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+
+    MSG m; 
+    while (GetMessage(&m, NULL, 0, 0)) { 
+        TranslateMessage(&m); 
+        DispatchMessage(&m); 
     }
 
-    UnhookWinEvent(hook);
     return 0;
 }
