@@ -1,6 +1,11 @@
 {
     "Code.exe": "EN",
+    "GitHubDesktop.exe": "EN",
+    "Riot Client.exe": "EN",
     "Weixin.exe": "ZH",
+    "WindowsTerminal.exe": "EN",
     "chrome.exe": "ZH",
-    "claude.exe": "ZH"
+    "claude.exe": "ZH",
+    "cloudmusic.exe": "ZH",
+    "powershell.exe": "EN"
 }
