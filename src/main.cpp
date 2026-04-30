@@ -33,14 +33,21 @@
 #define ID_BTN_CLEAR_RULE 205
 #define ID_BTN_TOGGLE_DEFAULT 206
 #define ID_CHK_STARTUP        207
+#define ID_CHK_START_MINIMIZED 208
+#define ID_TRAY_SHOW          301
+#define ID_TRAY_EXIT          302
 
 // GUI Global variables
 std::map<std::wstring, HKL> appRules;    // Per-app input language rules
 HKL g_defaultLang = HKL_ZH;              // Fallback language for apps without a rule
+bool g_startMinimizedToTray = false;      // Hide config panel on startup
+bool g_isExiting = false;                 // Allows WM_CLOSE to quit when requested
 HWND g_hwndUI = NULL;                    // Indicator popup window
 HWND g_hwndConfigPannel = NULL;          // Configuration panel
 HWND g_hwndListBox = NULL;               // App list box
 HWND g_hwndDefaultBtn = NULL;            // Default language toggle button
+HWND g_hwndStartupChk = NULL;            // Startup checkbox
+HWND g_hwndStartMinimizedChk = NULL;     // Start minimized checkbox
 std::vector<std::wstring> g_discoveredList; // Mirrors listbox entries for index lookup
 NOTIFYICONDATAW g_nid = { 0 };           // System tray icon data
 FILETIME g_lastWriteTime = { 0 };        // Tracks rules.json modification time for hot-reload
@@ -79,11 +86,51 @@ void SetStartup(bool enable) {
         if (enable) {
             wchar_t exePath[MAX_PATH];
             GetModuleFileNameW(NULL, exePath, MAX_PATH);
-            RegSetValueExW(hKey, L"InputSchuyn", 0, REG_SZ, (BYTE*)exePath, (lstrlenW(exePath) + 1) * sizeof(wchar_t));
+            std::wstring quotedPath = L"\"";
+            quotedPath += exePath;
+            quotedPath += L"\"";
+            RegSetValueExW(hKey, L"InputSchuyn", 0, REG_SZ, (BYTE*)quotedPath.c_str(), (DWORD)((quotedPath.size() + 1) * sizeof(wchar_t)));
         } else {
             RegDeleteValueW(hKey, L"InputSchuyn");
         }
         RegCloseKey(hKey);
+    }
+}
+
+bool IsStartupEnabled() {
+    HKEY hKey;
+    const wchar_t* runPath = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    bool enabled = false;
+    if (RegOpenKeyW(HKEY_CURRENT_USER, runPath, &hKey) == ERROR_SUCCESS) {
+        enabled = RegQueryValueExW(hKey, L"InputSchuyn", NULL, NULL, NULL, NULL) == ERROR_SUCCESS;
+        RegCloseKey(hKey);
+    }
+    return enabled;
+}
+
+void SaveSettings() {
+    std::wstring configPath = GetExeDirectory() + L"\\settings.json";
+    std::wofstream file(configPath);
+    if (!file.is_open()) return;
+
+    file << L"{\n";
+    file << L"    \"startMinimizedToTray\": " << (g_startMinimizedToTray ? L"true" : L"false") << L",\n";
+    file << L"    \"defaultLanguage\": \"" << (g_defaultLang == HKL_EN ? L"EN" : L"ZH") << L"\"\n";
+    file << L"}";
+}
+
+void LoadSettings() {
+    std::wstring configPath = GetExeDirectory() + L"\\settings.json";
+    std::wifstream file(configPath);
+    if (!file.is_open()) return;
+
+    std::wstring line;
+    while (std::getline(file, line)) {
+        if (line.find(L"startMinimizedToTray") != std::wstring::npos) {
+            g_startMinimizedToTray = line.find(L"true") != std::wstring::npos;
+        } else if (line.find(L"defaultLanguage") != std::wstring::npos) {
+            g_defaultLang = line.find(L"EN") != std::wstring::npos ? HKL_EN : HKL_ZH;
+        }
     }
 }
 
@@ -172,8 +219,21 @@ void RefreshConfigList() {
 LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_TRAYICON:
-            if (lp == WM_LBUTTONDBLCLK) ShowWindow(hwnd, SW_SHOW);
-                break;
+            if (lp == WM_LBUTTONDBLCLK) {
+                ShowWindow(hwnd, SW_SHOW);
+                SetForegroundWindow(hwnd);
+            } else if (lp == WM_RBUTTONUP) {
+                POINT pt;
+                GetCursorPos(&pt);
+                HMENU menu = CreatePopupMenu();
+                AppendMenuW(menu, MF_STRING, ID_TRAY_SHOW, L"Show Config");
+                AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+                AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT, L"Exit");
+                SetForegroundWindow(hwnd);
+                TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, NULL);
+                DestroyMenu(menu);
+            }
+            break;
         case WM_COMMAND: {
             int wmId = LOWORD(wp);
             if (wmId == ID_BTN_ADD_EN || wmId == ID_BTN_ADD_ZH) {
@@ -203,14 +263,28 @@ LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (wmId == ID_BTN_TOGGLE_DEFAULT) {
                 g_defaultLang = (g_defaultLang == HKL_ZH ? HKL_EN : HKL_ZH);
                 SetWindowTextW(g_hwndDefaultBtn, g_defaultLang == HKL_ZH ? L"Default: ZH" : L"Default: EN");
+                SaveSettings();
             }
             if (wmId == ID_CHK_STARTUP) {
                 SetStartup(SendMessage((HWND)lp, BM_GETCHECK, 0, 0) == BST_CHECKED);
+            }
+            if (wmId == ID_CHK_START_MINIMIZED) {
+                g_startMinimizedToTray = SendMessage((HWND)lp, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                SaveSettings();
+            }
+            if (wmId == ID_TRAY_SHOW) {
+                ShowWindow(hwnd, SW_SHOW);
+                SetForegroundWindow(hwnd);
+            }
+            if (wmId == ID_TRAY_EXIT) {
+                g_isExiting = true;
+                DestroyWindow(hwnd);
             }
             if (wmId == ID_BTN_REFRESH) RefreshConfigList();
             break;
         }
         case WM_CLOSE:
+            if (g_isExiting) break;
             ShowWindow(hwnd, SW_HIDE); // Clicking X only hides the window, does not exit the program
             return 0;
         case WM_DESTROY: 
@@ -262,13 +336,13 @@ void CALLBACK WinEventProc(HWINEVENTHOOK h, DWORD e, HWND hwnd, LONG o, LONG c, 
     }
 }
 
-int main() {
-    ShowWindow(GetConsoleWindow(), SW_HIDE); // Hide the console window
-
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
+    LoadSettings();
+    
     // Initialize UI components
     WNDCLASSW wc = { 0 }; 
     wc.lpfnWndProc = UIWndProc; 
-    wc.hInstance = GetModuleHandle(NULL);
+    wc.hInstance = hInstance;
     wc.lpszClassName = L"InputSchuynUI"; 
     RegisterClassW(&wc);
     g_hwndUI = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT,
@@ -277,7 +351,7 @@ int main() {
 
     WNDCLASSW cc = { 0 }; 
     cc.lpfnWndProc = ConfigWndProc; 
-    cc.hInstance = GetModuleHandle(NULL);
+    cc.hInstance = hInstance;
     cc.lpszClassName = L"ConfigPannelClass"; 
     cc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     RegisterClassW(&cc);
@@ -290,11 +364,18 @@ int main() {
     CreateWindowW(L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE, 290, 350, 80, 35, g_hwndConfigPannel, (HMENU)ID_BTN_REFRESH, cc.hInstance, NULL);
     
     g_hwndDefaultBtn = CreateWindowW(L"BUTTON", L"Default: ZH", WS_CHILD | WS_VISIBLE, 20, 400, 120, 35, g_hwndConfigPannel, (HMENU)ID_BTN_TOGGLE_DEFAULT, cc.hInstance, NULL);
-    CreateWindowW(L"BUTTON", L"Startup", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 160, 400, 100, 35, g_hwndConfigPannel, (HMENU)ID_CHK_STARTUP, cc.hInstance, NULL);
+    g_hwndStartupChk = CreateWindowW(L"BUTTON", L"Startup", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 160, 400, 100, 35, g_hwndConfigPannel, (HMENU)ID_CHK_STARTUP, cc.hInstance, NULL);
+    g_hwndStartMinimizedChk = CreateWindowW(L"BUTTON", L"Start minimized to tray", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 20, 440, 220, 35, g_hwndConfigPannel, (HMENU)ID_CHK_START_MINIMIZED, cc.hInstance, NULL);
 
     CreateTrayIcon(g_hwndConfigPannel);
     LoadRulesJson(); 
     RefreshConfigList();
+    SetWindowTextW(g_hwndDefaultBtn, g_defaultLang == HKL_ZH ? L"Default: ZH" : L"Default: EN");
+    SendMessageW(g_hwndStartupChk, BM_SETCHECK, IsStartupEnabled() ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(g_hwndStartMinimizedChk, BM_SETCHECK, g_startMinimizedToTray ? BST_CHECKED : BST_UNCHECKED, 0);
+    if (!g_startMinimizedToTray) {
+        ShowWindow(g_hwndConfigPannel, SW_SHOW);
+    }
     SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, NULL, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 
     MSG m; 

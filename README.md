@@ -15,6 +15,11 @@ InputSchuyn listens for foreground window changes via `SetWinEventHook`. When yo
 
 ## Quick Start
 
+The config panel includes a **Start minimized to tray** checkbox. When enabled,
+the app saves that setting immediately and starts hidden in the tray the next
+time you run it. Double-click the tray icon to reopen the panel, or right-click
+the tray icon for Show/Exit.
+
 1. Place `InputSchuyn.exe` and `rules.json` in the same directory
 2. Run `InputSchuyn.exe` — the config panel opens automatically
 3. Select an app from the list, click **Set EN** or **Set ZH**
@@ -36,12 +41,22 @@ Rules are stored in `rules.json` next to the executable:
 
 You can edit this file manually or use the built-in config panel. Either way, changes are picked up automatically.
 
+App settings are stored in `settings.json` next to the executable. The config
+panel saves these settings immediately when changed:
+
+```json
+{
+    "startMinimizedToTray": true,
+    "defaultLanguage": "ZH"
+}
+```
+
 ## Build
 
 Requires Windows SDK. Compile with MSVC:
 
 ```
-cl /EHsc /std:c++17 src/main.cpp /Fe:bin/InputSchuyn.exe
+cl /EHsc /std:c++17 src/main.cpp /Fe:bin/InputSchuyn.exe /link /SUBSYSTEM:WINDOWS
 ```
 
 Links: `user32.lib`, `gdi32.lib`, `comctl32.lib`.

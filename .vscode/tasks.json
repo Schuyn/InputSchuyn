@@ -8,8 +8,11 @@
                 "/Zi",
                 "/EHsc",
                 "/nologo",
-                "/Fe${fileDirname}\\${fileBasenameNoExtension}.exe",
-                "${file}"
+                "/std:c++17",
+                "/Fe${workspaceFolder}\\bin\\InputSchuyn.exe",
+                "${file}",
+                "/link",
+                "/SUBSYSTEM:WINDOWS"
             ],
             "options": {
                 "cwd": "${fileDirname}"
