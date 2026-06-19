@@ -1,15 +1,12 @@
 {
     "ChatGPT.exe": "ZH",
     "Code.exe": "EN",
-    "Codex.exe": "EN",
-    "GitHubDesktop.exe": "EN",
-    "League of Legends.exe": "EN",
-    "Riot Client.exe": "EN",
-    "VALORANT-Win64-Shipping.exe": "EN",
+    "Codex.exe": "ZH",
     "Weixin.exe": "ZH",
     "WindowsTerminal.exe": "EN",
     "chrome.exe": "ZH",
     "claude.exe": "ZH",
     "cloudmusic.exe": "ZH",
+    "cmd.exe": "EN",
     "powershell.exe": "EN"
 }
